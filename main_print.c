@@ -1,431 +1,307 @@
+/* USER CODE BEGIN Header */
 /**
   ******************************************************************************
-  * @file      startup_stm32f401xe.s
-  * @author    MCD Application Team
-  * @brief     STM32F401xExx Devices vector table for GCC based toolchains. 
-  *            This module performs:
-  *                - Set the initial SP
-  *                - Set the initial PC == Reset_Handler,
-  *                - Set the vector table entries with the exceptions ISR address
-  *                - Branches to main in the C library (which eventually
-  *                  calls main()).
-  *            After Reset the Cortex-M4 processor is in Thread mode,
-  *            priority is Privileged, and the Stack is set to Main.
-  ******************************************************************************
-  * @attention
-  *
-  * Copyright (c) 2017 STMicroelectronics.
-  * All rights reserved.
-  *
-  * This software is licensed under terms that can be found in the LICENSE file
-  * in the root directory of this software component.
-  * If no LICENSE file comes with this software, it is provided AS-IS.
-  *
+  * @file           : main.c
+  * @brief          : Main program body
   ******************************************************************************
   */
-    
-  .syntax unified
-  .cpu cortex-m4
-  .fpu softvfp
-  .thumb
+/* USER CODE END Header */
+/* Includes ------------------------------------------------------------------*/
+#include "main.h"
 
-.global  g_pfnVectors
-.global  Default_Handler
+/* Private includes ----------------------------------------------------------*/
+/* USER CODE BEGIN Includes */
+#include <stdio.h> // printf 함수를 사용하기 위해 stdio.h 헤더 추가
+/* USER CODE END Includes */
 
-/* start address for the initialization values of the .data section. 
-defined in linker script */
-.word  _sidata
-/* start address for the .data section. defined in linker script */  
-.word  _sdata
-/* end address for the .data section. defined in linker script */
-.word  _edata
-/* start address for the .bss section. defined in linker script */
-.word  _sbss
-/* end address for the .bss section. defined in linker script */
-.word  _ebss
-/* stack used for SystemInit_ExtMemCtl; always internal RAM used */
+/* Private typedef -----------------------------------------------------------*/
+/* USER CODE BEGIN PTD */
 
-/**
- * @brief  This is the code that gets called when the processor first
- *          starts execution following a reset event. Only the absolutely
- *          necessary set is performed, after which the application
- *          supplied main() routine is called. 
- * @param  None
- * @retval : None
-*/
+/* USER CODE END PTD */
 
-    .section  .text.Reset_Handler
-  .weak  Reset_Handler
-  .type  Reset_Handler, %function
-Reset_Handler:  
-  ldr   sp, =_estack    		 /* set stack pointer */
+/* Private define ------------------------------------------------------------*/
+/* USER CODE BEGIN PD */
+// **[레지스터 주소 및 비트 정의 (매크로 상수)]**
+#define GPIOA_BASE        (0x40020000UL)  // GPIOA 기준 주소 (LED LD2 연결)
+#define GPIOA_MODER_OFFSET  (0x00UL)      // MODER 레지스터 offset (Mode 설정)
+#define GPIOA_ODR_OFFSET    (0x14UL)      // ODR 레지스터 offset (Output Data)
+#define GPIOC_BASE        (0x40020800UL)  // GPIOC 기준 주소 (버튼 B1 연결)
+#define GPIOC_IDR_OFFSET    (0x10UL)      // IDR 레지스터 offset (Input Data)
+#define RCC_AHB1ENR_OFFSET  (0x30UL)      // RCC AHB1ENR 레지스터 offset (AHB1 클럭 제어)
+#define RCC_BASE          (0x40023800UL)  // RCC 기준 주소
 
-/* Copy the data segment initializers from flash to SRAM */  
-  ldr r0, =_sdata
-  ldr r1, =_edata
-  ldr r2, =_sidata
-  movs r3, #0
-  b LoopCopyDataInit
+#define RCC_AHB1ENR       (*(unsigned int*)(RCC_BASE + RCC_AHB1ENR_OFFSET)) // RCC AHB1 클럭 Enable 레지스터
+#define GPIOA_MODER       (*(unsigned int*)(GPIOA_BASE + GPIOA_MODER_OFFSET)) // GPIOA Mode 설정 레지스터
+#define GPIOA_ODR         (*(unsigned int*)(GPIOA_BASE + GPIOA_ODR_OFFSET))   // GPIOA Output Data 레지스터
+#define GPIOC_IDR         (*(unsigned int*)(GPIOC_BASE + GPIOC_IDR_OFFSET))   // GPIOC Input Data 레지스터
 
-CopyDataInit:
-  ldr r4, [r2, r3]
-  str r4, [r0, r3]
-  adds r3, r3, #4
+#define LED_PIN           (5)           // LD2 LED 핀 번호 (PA5)
+#define BUTTON_PIN        (13)          // B1 버튼 핀 번호 (PC13)
+/* USER CODE END PD */
 
-LoopCopyDataInit:
-  adds r4, r0, r3
-  cmp r4, r1
-  bcc CopyDataInit
-  
-/* Zero fill the bss segment. */
-  ldr r2, =_sbss
-  ldr r4, =_ebss
-  movs r3, #0
-  b LoopFillZerobss
+/* Private macro -------------------------------------------------------------*/
+/* USER CODE BEGIN PM */
 
-FillZerobss:
-  str  r3, [r2]
-  adds r2, r2, #4
+/* USER CODE END PM */
 
-LoopFillZerobss:
-  cmp r2, r4
-  bcc FillZerobss
+/* Private variables ---------------------------------------------------------*/
+UART_HandleTypeDef huart2;
 
-/* Call the clock system initialization function.*/
-  bl  SystemInit   
-/* Call static constructors */
-    bl __libc_init_array
-/* Call the application's entry point.*/
-  bl  main
-  bx  lr    
-.size  Reset_Handler, .-Reset_Handler
+/* USER CODE BEGIN PV */
+unsigned int button_press_count = 0; // 버튼 누른 횟수 저장
+/* USER CODE END PV */
+
+/* Private function prototypes -----------------------------------------------*/
+void SystemClock_Config(void);
+static void MX_GPIO_Init(void);
+static void MX_USART2_UART_Init(void);
+/* USER CODE BEGIN PFP */
+void delay_ms(uint32_t ms); // 간단한 딜레이 함수 선언 (HAL_Delay 대신)
+void led_blink(uint32_t count); // LED를 깜빡이는 함수 선언
+/* USER CODE END PFP */
+
+/* Private user code ---------------------------------------------------------*/
+/* USER CODE BEGIN 0 */
+int __io_putchar(int ch)
+{
+ if ( ch == '\n' )
+	 HAL_UART_Transmit(&huart2, (uint8_t*)&"\r", 1, HAL_MAX_DELAY);
+ HAL_UART_Transmit(&huart2, (uint8_t*)&ch, 1, HAL_MAX_DELAY);
+ return ch;
+}
+/* USER CODE END 0 */
 
 /**
- * @brief  This is the code that gets called when the processor receives an 
- *         unexpected interrupt.  This simply enters an infinite loop, preserving
- *         the system state for examination by a debugger.
- * @param  None     
- * @retval None       
-*/
-    .section  .text.Default_Handler,"ax",%progbits
-Default_Handler:
-Infinite_Loop:
-  b  Infinite_Loop
-  .size  Default_Handler, .-Default_Handler
-/******************************************************************************
-*
-* The minimal vector table for a Cortex M3. Note that the proper constructs
-* must be placed on this to ensure that it ends up at physical address
-* 0x0000.0000.
-* 
-*******************************************************************************/
-   .section  .isr_vector,"a",%progbits
-  .type  g_pfnVectors, %object
-  .size  g_pfnVectors, .-g_pfnVectors
-    
-g_pfnVectors:
-  .word  _estack
-  .word  Reset_Handler
-  .word  NMI_Handler
-  .word  HardFault_Handler
-  .word  MemManage_Handler
-  .word  BusFault_Handler
-  .word  UsageFault_Handler
-  .word  0
-  .word  0
-  .word  0
-  .word  0
-  .word  SVC_Handler
-  .word  DebugMon_Handler
-  .word  0
-  .word  PendSV_Handler
-  .word  SysTick_Handler
-  
-  /* External Interrupts */
-  .word     WWDG_IRQHandler                   /* Window WatchDog              */                                        
-  .word     PVD_IRQHandler                    /* PVD through EXTI Line detection */                        
-  .word     TAMP_STAMP_IRQHandler             /* Tamper and TimeStamps through the EXTI line */            
-  .word     RTC_WKUP_IRQHandler               /* RTC Wakeup through the EXTI line */                      
-  .word     FLASH_IRQHandler                  /* FLASH                        */                                          
-  .word     RCC_IRQHandler                    /* RCC                          */                                            
-  .word     EXTI0_IRQHandler                  /* EXTI Line0                   */                        
-  .word     EXTI1_IRQHandler                  /* EXTI Line1                   */                          
-  .word     EXTI2_IRQHandler                  /* EXTI Line2                   */                          
-  .word     EXTI3_IRQHandler                  /* EXTI Line3                   */                          
-  .word     EXTI4_IRQHandler                  /* EXTI Line4                   */                          
-  .word     DMA1_Stream0_IRQHandler           /* DMA1 Stream 0                */                  
-  .word     DMA1_Stream1_IRQHandler           /* DMA1 Stream 1                */                   
-  .word     DMA1_Stream2_IRQHandler           /* DMA1 Stream 2                */                   
-  .word     DMA1_Stream3_IRQHandler           /* DMA1 Stream 3                */                   
-  .word     DMA1_Stream4_IRQHandler           /* DMA1 Stream 4                */                   
-  .word     DMA1_Stream5_IRQHandler           /* DMA1 Stream 5                */                   
-  .word     DMA1_Stream6_IRQHandler           /* DMA1 Stream 6                */                   
-  .word     ADC_IRQHandler                    /* ADC1, ADC2 and ADC3s         */                   
-  .word     0               				  /* Reserved                      */                         
-  .word     0              					  /* Reserved                     */                          
-  .word     0                                 /* Reserved                     */                          
-  .word     0                                 /* Reserved                     */                          
-  .word     EXTI9_5_IRQHandler                /* External Line[9:5]s          */                          
-  .word     TIM1_BRK_TIM9_IRQHandler          /* TIM1 Break and TIM9          */         
-  .word     TIM1_UP_TIM10_IRQHandler          /* TIM1 Update and TIM10        */         
-  .word     TIM1_TRG_COM_TIM11_IRQHandler     /* TIM1 Trigger and Commutation and TIM11 */
-  .word     TIM1_CC_IRQHandler                /* TIM1 Capture Compare         */                          
-  .word     TIM2_IRQHandler                   /* TIM2                         */                   
-  .word     TIM3_IRQHandler                   /* TIM3                         */                   
-  .word     TIM4_IRQHandler                   /* TIM4                         */                   
-  .word     I2C1_EV_IRQHandler                /* I2C1 Event                   */                          
-  .word     I2C1_ER_IRQHandler                /* I2C1 Error                   */                          
-  .word     I2C2_EV_IRQHandler                /* I2C2 Event                   */                          
-  .word     I2C2_ER_IRQHandler                /* I2C2 Error                   */                            
-  .word     SPI1_IRQHandler                   /* SPI1                         */                   
-  .word     SPI2_IRQHandler                   /* SPI2                         */                   
-  .word     USART1_IRQHandler                 /* USART1                       */                   
-  .word     USART2_IRQHandler                 /* USART2                       */                   
-  .word     0               				  /* Reserved                       */                   
-  .word     EXTI15_10_IRQHandler              /* External Line[15:10]s        */                          
-  .word     RTC_Alarm_IRQHandler              /* RTC Alarm (A and B) through EXTI Line */                 
-  .word     OTG_FS_WKUP_IRQHandler            /* USB OTG FS Wakeup through EXTI line */                       
-  .word     0                                 /* Reserved     				  */         
-  .word     0                                 /* Reserved       			  */         
-  .word     0                                 /* Reserved 					  */
-  .word     0                                 /* Reserved                     */                          
-  .word     DMA1_Stream7_IRQHandler           /* DMA1 Stream7                 */                          
-  .word     0                                 /* Reserved                     */                   
-  .word     SDIO_IRQHandler                   /* SDIO                         */                   
-  .word     TIM5_IRQHandler                   /* TIM5                         */                   
-  .word     SPI3_IRQHandler                   /* SPI3                         */                   
-  .word     0                                 /* Reserved                     */                   
-  .word     0                                 /* Reserved                     */                   
-  .word     0                                 /* Reserved                     */                   
-  .word     0                                 /* Reserved                     */
-  .word     DMA2_Stream0_IRQHandler           /* DMA2 Stream 0                */                   
-  .word     DMA2_Stream1_IRQHandler           /* DMA2 Stream 1                */                   
-  .word     DMA2_Stream2_IRQHandler           /* DMA2 Stream 2                */                   
-  .word     DMA2_Stream3_IRQHandler           /* DMA2 Stream 3                */                   
-  .word     DMA2_Stream4_IRQHandler           /* DMA2 Stream 4                */                   
-  .word     0                    			  /* Reserved                     */                   
-  .word     0              					  /* Reserved                     */                     
-  .word     0              					  /* Reserved                     */                          
-  .word     0             					  /* Reserved                     */                          
-  .word     0              					  /* Reserved                     */                          
-  .word     0              					  /* Reserved                     */                          
-  .word     OTG_FS_IRQHandler                 /* USB OTG FS                   */                   
-  .word     DMA2_Stream5_IRQHandler           /* DMA2 Stream 5                */                   
-  .word     DMA2_Stream6_IRQHandler           /* DMA2 Stream 6                */                   
-  .word     DMA2_Stream7_IRQHandler           /* DMA2 Stream 7                */                   
-  .word     USART6_IRQHandler                 /* USART6                       */                    
-  .word     I2C3_EV_IRQHandler                /* I2C3 event                   */                          
-  .word     I2C3_ER_IRQHandler                /* I2C3 error                   */                          
-  .word     0                                 /* Reserved                     */                   
-  .word     0                                 /* Reserved                     */                   
-  .word     0                                 /* Reserved                     */                         
-  .word     0                                 /* Reserved                     */                   
-  .word     0                                 /* Reserved                     */                   
-  .word     0                                 /* Reserved                     */                   
-  .word     0                                 /* Reserved                     */
-  .word     FPU_IRQHandler                    /* FPU                          */
-  .word     0                                 /* Reserved                     */                   
-  .word     0                                 /* Reserved                     */
-  .word     SPI4_IRQHandler                   /* SPI4                         */     
-                    
-/*******************************************************************************
-*
-* Provide weak aliases for each Exception handler to the Default_Handler. 
-* As they are weak aliases, any function with the same name will override 
-* this definition.
-* 
-*******************************************************************************/
-   .weak      NMI_Handler
-   .thumb_set NMI_Handler,Default_Handler
-  
-   .weak      HardFault_Handler
-   .thumb_set HardFault_Handler,Default_Handler
-  
-   .weak      MemManage_Handler
-   .thumb_set MemManage_Handler,Default_Handler
-  
-   .weak      BusFault_Handler
-   .thumb_set BusFault_Handler,Default_Handler
+  * @brief  The application entry point.
+  * @retval int
+  */
+int main(void)
+{
+  /* USER CODE BEGIN 1 */
 
-   .weak      UsageFault_Handler
-   .thumb_set UsageFault_Handler,Default_Handler
+  /* USER CODE END 1 */
 
-   .weak      SVC_Handler
-   .thumb_set SVC_Handler,Default_Handler
+  /* MCU Configuration--------------------------------------------------------*/
 
-   .weak      DebugMon_Handler
-   .thumb_set DebugMon_Handler,Default_Handler
+  /* Reset of all peripherals, Initializes the Flash interface and the Systick. */
+  HAL_Init();
 
-   .weak      PendSV_Handler
-   .thumb_set PendSV_Handler,Default_Handler
+  /* USER CODE BEGIN Init */
 
-   .weak      SysTick_Handler
-   .thumb_set SysTick_Handler,Default_Handler              
-  
-   .weak      WWDG_IRQHandler                   
-   .thumb_set WWDG_IRQHandler,Default_Handler      
-                  
-   .weak      PVD_IRQHandler      
-   .thumb_set PVD_IRQHandler,Default_Handler
-               
-   .weak      TAMP_STAMP_IRQHandler            
-   .thumb_set TAMP_STAMP_IRQHandler,Default_Handler
-            
-   .weak      RTC_WKUP_IRQHandler                  
-   .thumb_set RTC_WKUP_IRQHandler,Default_Handler
-            
-   .weak      FLASH_IRQHandler         
-   .thumb_set FLASH_IRQHandler,Default_Handler
-                  
-   .weak      RCC_IRQHandler      
-   .thumb_set RCC_IRQHandler,Default_Handler
-                  
-   .weak      EXTI0_IRQHandler         
-   .thumb_set EXTI0_IRQHandler,Default_Handler
-                  
-   .weak      EXTI1_IRQHandler         
-   .thumb_set EXTI1_IRQHandler,Default_Handler
-                     
-   .weak      EXTI2_IRQHandler         
-   .thumb_set EXTI2_IRQHandler,Default_Handler 
-                 
-   .weak      EXTI3_IRQHandler         
-   .thumb_set EXTI3_IRQHandler,Default_Handler
-                        
-   .weak      EXTI4_IRQHandler         
-   .thumb_set EXTI4_IRQHandler,Default_Handler
-                  
-   .weak      DMA1_Stream0_IRQHandler               
-   .thumb_set DMA1_Stream0_IRQHandler,Default_Handler
-         
-   .weak      DMA1_Stream1_IRQHandler               
-   .thumb_set DMA1_Stream1_IRQHandler,Default_Handler
-                  
-   .weak      DMA1_Stream2_IRQHandler               
-   .thumb_set DMA1_Stream2_IRQHandler,Default_Handler
-                  
-   .weak      DMA1_Stream3_IRQHandler               
-   .thumb_set DMA1_Stream3_IRQHandler,Default_Handler 
-                 
-   .weak      DMA1_Stream4_IRQHandler              
-   .thumb_set DMA1_Stream4_IRQHandler,Default_Handler
-                  
-   .weak      DMA1_Stream5_IRQHandler               
-   .thumb_set DMA1_Stream5_IRQHandler,Default_Handler
-                  
-   .weak      DMA1_Stream6_IRQHandler               
-   .thumb_set DMA1_Stream6_IRQHandler,Default_Handler
-                  
-   .weak      ADC_IRQHandler      
-   .thumb_set ADC_IRQHandler,Default_Handler
-            
-   .weak      EXTI9_5_IRQHandler   
-   .thumb_set EXTI9_5_IRQHandler,Default_Handler
-            
-   .weak      TIM1_BRK_TIM9_IRQHandler            
-   .thumb_set TIM1_BRK_TIM9_IRQHandler,Default_Handler
-            
-   .weak      TIM1_UP_TIM10_IRQHandler            
-   .thumb_set TIM1_UP_TIM10_IRQHandler,Default_Handler
-      
-   .weak      TIM1_TRG_COM_TIM11_IRQHandler      
-   .thumb_set TIM1_TRG_COM_TIM11_IRQHandler,Default_Handler
-      
-   .weak      TIM1_CC_IRQHandler   
-   .thumb_set TIM1_CC_IRQHandler,Default_Handler
-                  
-   .weak      TIM2_IRQHandler            
-   .thumb_set TIM2_IRQHandler,Default_Handler
-                  
-   .weak      TIM3_IRQHandler            
-   .thumb_set TIM3_IRQHandler,Default_Handler
-                  
-   .weak      TIM4_IRQHandler            
-   .thumb_set TIM4_IRQHandler,Default_Handler
-                  
-   .weak      I2C1_EV_IRQHandler   
-   .thumb_set I2C1_EV_IRQHandler,Default_Handler
-                     
-   .weak      I2C1_ER_IRQHandler   
-   .thumb_set I2C1_ER_IRQHandler,Default_Handler
-                     
-   .weak      I2C2_EV_IRQHandler   
-   .thumb_set I2C2_EV_IRQHandler,Default_Handler
-                  
-   .weak      I2C2_ER_IRQHandler   
-   .thumb_set I2C2_ER_IRQHandler,Default_Handler
-                           
-   .weak      SPI1_IRQHandler            
-   .thumb_set SPI1_IRQHandler,Default_Handler
-                        
-   .weak      SPI2_IRQHandler            
-   .thumb_set SPI2_IRQHandler,Default_Handler
-                  
-   .weak      USART1_IRQHandler      
-   .thumb_set USART1_IRQHandler,Default_Handler
-                     
-   .weak      USART2_IRQHandler      
-   .thumb_set USART2_IRQHandler,Default_Handler
-                                  
-   .weak      EXTI15_10_IRQHandler               
-   .thumb_set EXTI15_10_IRQHandler,Default_Handler
-               
-   .weak      RTC_Alarm_IRQHandler               
-   .thumb_set RTC_Alarm_IRQHandler,Default_Handler
-            
-   .weak      OTG_FS_WKUP_IRQHandler         
-   .thumb_set OTG_FS_WKUP_IRQHandler,Default_Handler
-            
-   .weak      DMA1_Stream7_IRQHandler               
-   .thumb_set DMA1_Stream7_IRQHandler,Default_Handler
-                     
-   .weak      SDIO_IRQHandler            
-   .thumb_set SDIO_IRQHandler,Default_Handler
-                     
-   .weak      TIM5_IRQHandler            
-   .thumb_set TIM5_IRQHandler,Default_Handler
-                     
-   .weak      SPI3_IRQHandler            
-   .thumb_set SPI3_IRQHandler,Default_Handler
-                     
-   .weak      DMA2_Stream0_IRQHandler               
-   .thumb_set DMA2_Stream0_IRQHandler,Default_Handler
-               
-   .weak      DMA2_Stream1_IRQHandler               
-   .thumb_set DMA2_Stream1_IRQHandler,Default_Handler
-                  
-   .weak      DMA2_Stream2_IRQHandler               
-   .thumb_set DMA2_Stream2_IRQHandler,Default_Handler
-            
-   .weak      DMA2_Stream3_IRQHandler               
-   .thumb_set DMA2_Stream3_IRQHandler,Default_Handler
-            
-   .weak      DMA2_Stream4_IRQHandler               
-   .thumb_set DMA2_Stream4_IRQHandler,Default_Handler
-            
-   .weak      OTG_FS_IRQHandler      
-   .thumb_set OTG_FS_IRQHandler,Default_Handler
-                     
-   .weak      DMA2_Stream5_IRQHandler               
-   .thumb_set DMA2_Stream5_IRQHandler,Default_Handler
-                  
-   .weak      DMA2_Stream6_IRQHandler               
-   .thumb_set DMA2_Stream6_IRQHandler,Default_Handler
-                  
-   .weak      DMA2_Stream7_IRQHandler               
-   .thumb_set DMA2_Stream7_IRQHandler,Default_Handler
-                  
-   .weak      USART6_IRQHandler      
-   .thumb_set USART6_IRQHandler,Default_Handler
-                        
-   .weak      I2C3_EV_IRQHandler   
-   .thumb_set I2C3_EV_IRQHandler,Default_Handler
-                        
-   .weak      I2C3_ER_IRQHandler   
-   .thumb_set I2C3_ER_IRQHandler,Default_Handler
-                        
-   .weak      FPU_IRQHandler                  
-   .thumb_set FPU_IRQHandler,Default_Handler  
+  /* USER CODE END Init */
 
-   .weak      SPI4_IRQHandler                  
-   .thumb_set SPI4_IRQHandler,Default_Handler 
+  /* Configure the system clock */
+  SystemClock_Config();
+
+  /* USER CODE BEGIN SysInit */
+
+  /* USER CODE END SysInit */
+
+  /* Initialize all configured peripherals */
+  MX_GPIO_Init();
+  MX_USART2_UART_Init();
+  /* USER CODE BEGIN 2 */
+    printf("Hello, STM32!\n"); // 시작 메시지
+
+  // **[GPIO 레지스터 초기화 (Init 부분)]**
+
+  // 1. GPIOA 클럭 활성화 (RCC_AHB1ENR 레지스터 설정)
+  RCC_AHB1ENR |= (1 << 0); // GPIOAEN 비트 (0번 비트) 설정
+
+  // 2. PA5 핀 출력 모드로 설정 (GPIOA_MODER 레지스터 설정)
+  GPIOA_MODER &= ~(3 << (LED_PIN * 2)); // PA5 핀 관련 비트(10, 11번 비트) 초기화 (00: Input)
+  GPIOA_MODER |= (1 << (LED_PIN * 2));  // PA5 핀 관련 비트(10번 비트) 1로 설정 (01: Output)
+
+  // 3. GPIOC 클럭 활성화 (RCC_AHB1ENR 레지스터 설정) - 버튼 B1 (PC13) 사용
+  RCC_AHB1ENR |= (1 << 2); // GPIOCEN 비트 (2번 비트) 설정
+
+  // 4. PC13 핀 입력 모드로 설정 (GPIOA_MODER 레지스터 설정) - 풀업 저항 사용 (풀업 저항은 외부 풀업 사용 or 내장 풀업 사용)
+  // 여기서는 외부 풀업 저항 없이, STM32 내장 풀업 저항 사용
+  GPIO_InitTypeDef GPIO_InitStruct = {0}; // (HAL 라이브러리 구조체, 레지스터 직접 제어와 무관) - 풀업 설정을 위해 HAL 함수 사용
+  GPIO_InitStruct.Pin = GPIO_PIN_13;      // PC13 핀
+  GPIO_InitStruct.Mode = GPIO_MODE_INPUT; // 입력 모드
+  GPIO_InitStruct.Pull = GPIO_PULLUP;    // 풀업 저항 사용
+  HAL_GPIO_Init(GPIOC, &GPIO_InitStruct); // (HAL 함수, 레지스터 직접 제어와 무관) - 풀업 설정을 위해 HAL 함수 사용
+
+  /* USER CODE END 2 */
+
+  /* Infinite loop */
+  /* USER CODE BEGIN WHILE */
+  while (1)
+  {
+    // **[버튼 입력 확인 및 LED 제어 코드]**
+
+    // 1. B1 버튼 (파란 버튼) 상태 읽기 (GPIOC_IDR 레지스터 사용)
+    if (!(GPIOC_IDR & (1 << BUTTON_PIN)))  // B1 버튼 (PC13) 눌렸는지 확인 (풀업 저항 사용 가정)
+    {
+      delay_ms(10); // Debouncing (채터링 방지)
+      if (!(GPIOC_IDR & (1 << BUTTON_PIN))) // 버튼 다시 눌렸는지 확인 (Debouncing)
+      {
+        button_press_count++; // 버튼 누름 횟수 증가
+        printf("Button Pressed: %u times\n", button_press_count); // 터미널에 버튼 누른 횟수 출력
+        led_blink(button_press_count); // 누른 횟수만큼 LED 깜빡이기
+
+        while (!(GPIOC_IDR & (1 << BUTTON_PIN))); // 버튼에서 손 뗄 때까지 대기 (Debouncing)
+      }
+    }
+  }
+  /* USER CODE END WHILE */
+
+    /* USER CODE BEGIN 3 */
+  /* USER CODE END 3 */
+}
+
+/**
+  * @brief System Clock Configuration
+  * @retval None
+  */
+void SystemClock_Config(void)
+{
+  // ... (이전 코드와 동일)
+	  RCC_OscInitTypeDef RCC_OscInitStruct = {0};
+	  RCC_ClkInitTypeDef RCC_ClkInitStruct = {0};
+
+	  /** Configure the main internal regulator output voltage
+	  */
+	  __HAL_RCC_PWR_CLK_ENABLE();
+	  __HAL_PWR_VOLTAGESCALING_CONFIG(PWR_REGULATOR_VOLTAGE_SCALE1);
+
+	  /** Initializes the RCC Oscillators according to the specified parameters
+	  * in the RCC_OscInitTypeDef structure.
+	  */
+	  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSI;
+	  RCC_OscInitStruct.HSIState = RCC_HSI_ON;
+	  RCC_OscInitStruct.HSICalibrationValue = RCC_HSICALIBRATION_DEFAULT;
+	  RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
+	  RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSI;
+	  RCC_OscInitStruct.PLL.PLLM = 16;
+	  RCC_OscInitStruct.PLL.PLLN = 336;
+	  RCC_OscInitStruct.PLL.PLLP = RCC_PLLP_DIV4;
+	  RCC_OscInitStruct.PLL.PLLQ = 7;
+	  if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK)
+	  {
+	    Error_Handler();
+	  }
+
+	  /** Initializes the CPU, AHB and APB buses clocks
+	  */
+	  RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_HCLK|RCC_CLOCKTYPE_SYSCLK
+	                              |RCC_CLOCKTYPE_PCLK1|RCC_CLOCKTYPE_PCLK2;
+	  RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_PLLCLK;
+	  RCC_ClkInitStruct.AHBCLKDivider = RCC_SYSCLK_DIV1;
+	  RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV2;
+	  RCC_ClkInitStruct.APB2CLKDivider = RCC_HCLK_DIV1;
+
+	  if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_2) != HAL_OK)
+	  {
+	    Error_Handler();
+	  }
+}
+
+/**
+  * @brief USART2 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_USART2_UART_Init(void)
+{
+  huart2.Instance = USART2;
+  huart2.Init.BaudRate = 115200; // 115200으로 설정
+  huart2.Init.WordLength = UART_WORDLENGTH_8B;
+  huart2.Init.StopBits = UART_STOPBITS_1;
+  huart2.Init.Parity = UART_PARITY_NONE;
+  huart2.Init.Mode = UART_MODE_TX_RX;
+  huart2.Init.HwFlowCtl = UART_HWCONTROL_NONE;
+  huart2.Init.OverSampling = UART_OVERSAMPLING_16;
+  if (HAL_UART_Init(&huart2) != HAL_OK)
+  {
+    Error_Handler();
+  }
+
+}
+
+/**
+  * @brief GPIO Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_GPIO_Init(void)
+{
+    __HAL_RCC_GPIOC_CLK_ENABLE();
+  __HAL_RCC_GPIOA_CLK_ENABLE();
+
+  /*Configure GPIO pin Output Level */
+  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_5, GPIO_PIN_RESET);
+
+  /*Configure GPIO pin : PA5 */
+  GPIO_InitTypeDef GPIO_InitStruct = {0};
+
+  GPIO_InitStruct.Pin = GPIO_PIN_5;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
+
+  GPIO_InitStruct.Pin = GPIO_PIN_13;
+  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
+  GPIO_InitStruct.Pull = GPIO_PULLUP;
+  HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
+}
+
+/* USER CODE BEGIN 4 */
+
+void delay_ms(uint32_t ms)
+{
+  volatile uint32_t count = ms * 10000;
+  while(count--);
+}
+
+void led_blink(uint32_t count)
+{
+    for (uint32_t i = 0; i < count; i++)
+    {
+      GPIOA_ODR |= (1 << LED_PIN); // LED 켜기
+      delay_ms(30);          // 딜레이 시간 변경
+      GPIOA_ODR &= ~(1 << LED_PIN); // LED 끄기
+      delay_ms(30);          // 딜레이 시간 변경
+    }
+}
+
+
+/* USER CODE END 4 */
+
+/**
+  * @brief  This function is executed in case of error occurrence.
+  * @retval None
+  */
+void Error_Handler(void)
+{
+  /* USER CODE BEGIN Error_Handler_Debug */
+  /* User can add his own implementation to report the HAL error return state */
+  __disable_irq();
+  while (1)
+  {
+  }
+  /* USER CODE END Error_Handler_Debug */
+}
+
+#ifdef  USE_FULL_ASSERT
+/**
+  * @brief  Reports the name of the source file and the source line number
+  *         where the assert_param error has occurred.
+  * @param  file: pointer to the source file name
+  * @param  line: assert_param error line source number
+  * @retval None
+  */
+void assert_failed(uint8_t *file, uint32_t line)
+{
+  /* USER CODE BEGIN 6 */
+  /* User can add his own implementation to report the file name and line number,
+     ex: printf("Wrong parameters value: file %s on line %d\r\n", file, line) */
+  /* USER CODE END 6 */
+}
+#endif /* USE_FULL_ASSERT */
+
+/* USER CODE BEGIN 7 */
+
+/* USER CODE END 7 */
